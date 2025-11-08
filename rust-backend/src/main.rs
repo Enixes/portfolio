@@ -1,28 +1,38 @@
+use std::env;
 use axum::{routing::get, Json, Router};
+use axum::extract::State;
+use dotenvy::dotenv;
 use serde::Serialize;
+use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 struct Project {
     id: i32,
     title: String,
     description: String,
+    route: String,
 }
 
-async fn get_projects() -> Json<Vec<Project>> {
-    Json(vec![
-        Project {
-            id: 1,
-            title: "Rust + Next.js Portfolio".into(),
-            description: "Full-stack site".into(),
-        },
-        Project {
-            id: 2,
-            title: "Streaming Setup".into(),
-            description: "Moonlight 1080p 75Hz".into(),
-        },
-    ])
+impl Project {
+    fn new(id: i32, title: String, description: String) -> Self {
+        Self {
+            id,
+            title,
+            description,
+            route: String::from(""),
+        }
+
+    }
+}
+
+async fn get_projects(State(pool): State<PgPool>) -> Json<Vec<Project>> {
+    let projects = sqlx::query_as::<_, Project>("select id, title, description, route from projects")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|_| vec![]);
+    Json(projects)
 }
 
 async fn root() -> &'static str {
@@ -31,12 +41,18 @@ async fn root() -> &'static str {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenv().ok();
     let cors = CorsLayer::new().allow_origin(Any);
+
+    let database_url = env::var("DATABASE_URL")?;
+    let pool = PgPool::connect(&database_url).await?;
+
 
     // Build the router
     let app = Router::new()
         .route("/", get(root))
         .route("/projects", get(get_projects))
+        .with_state(pool)
         .layer(cors);
 
     // Bind manually with TcpListener (new in Axum 0.7)
